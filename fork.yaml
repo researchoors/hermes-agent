@@ -1,0 +1,171 @@
+title: "researchoors/hermes-agent"
+footer: |
+  [researchoors/hermes-agent](https://github.com/researchoors/hermes-agent) fork overview &middot; created with [Forkdiff](https://github.com/protolambda/forkdiff)
+base:
+  name: NousResearch/hermes-agent
+  url: https://github.com/NousResearch/hermes-agent
+  ## upstream pin (last sync point)
+  hash: ce0f529cde11f743a5cd2a8ee8a0d52088cb2065
+fork:
+  name: researchoors/hermes-agent
+  url: https://github.com/researchoors/hermes-agent
+  ## fork pin
+  hash: 723d1dd5a9f7a8bac2f48b84a409ab277e2c17c6
+def:
+    title: "researchoors/hermes-agent Fork Diff Overview"
+    description: |
+      The upstream [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent).
+      The fork at [`researchoors/hermes-agent`](https://github.com/researchoors/hermes-agent).
+
+    sub:
+      - title: "Wiki API (JSON-RPC endpoints)"
+        description: |
+          New `wiki.scan` and `wiki.page` JSON-RPC endpoints for the TUI gateway,
+          allowing programmatic access to file-system scanning and file content
+          retrieval from the Hermes agent's wiki/docs directories.
+        globs:
+          - "tui_gateway/wiki_api.py"
+          - "tui_gateway/server.py"
+
+      - title: "LLM Policy-Based Smart Approvals"
+        description: |
+          Extended the approval tool to support LLM-driven policy evaluation for
+          dangerous command decisions. Added Nomad orchestration mutation detection
+          — read-only inspection commands like `nomad job status`, `nomad alloc logs`,
+          and `nomad node status` are free, while mutations require approval.
+        globs:
+          - "tools/approval.py"
+          - "tests/tools/test_approval.py"
+
+      - title: "Session ID Exposure"
+        description: |
+          Exposed `HERMES_SESSION_ID` as both an environment variable and a
+          `ContextVar` so that agent tools and subprocess children can identify
+          the active session. Bridges ContextVar-based session vars into
+          subprocess environments.
+        globs:
+          - "gateway/session_context.py"
+          - "tools/environments/local.py"
+          - "tests/run_agent/test_session_id_env.py"
+          - "run_agent.py"
+
+      - title: "TUI: Link Resolution & OSC52 Clipboard"
+        description: |
+          Resolve markdown links in the TUI to readable page titles (e.g., GitHub
+          URLs show repo/PR titles). Added OSC52 clipboard capability detection
+          — skips native clipboard safety net on terminals that support OSC52,
+          preventing double-paste. New `externalLink.ts` library with URL
+          normalization, slug-based title labels, and link-title hooks.
+        globs:
+          - "ui-tui/src/lib/externalLink.ts"
+          - "ui-tui/src/__tests__/externalLink.test.ts"
+          - "ui-tui/src/components/markdown.tsx"
+          - "ui-tui/src/__tests__/markdown.test.ts"
+          - "ui-tui/packages/hermes-ink/src/ink/termio/osc.ts"
+          - "ui-tui/packages/hermes-ink/src/ink/termio/osc.test.ts"
+          - "ui-tui/packages/hermes-ink/src/utils/env.ts"
+
+      - title: "Upstream Backports: Mistral Deprecation"
+        description: |
+          Removed `mistralai` PyPI dependency from `[all]` and `termux-all` extras
+          after PyPI quarantined the package (2026-05-12). Disabled Mistral STT/TTS
+          provider selection and updated tests to expect disabled errors instead of
+          successful routing.
+        globs:
+          - "pyproject.toml"
+          - "tools/tts_tool.py"
+          - "tools/transcription_tools.py"
+          - "tests/tools/test_tts_mistral.py"
+          - "tests/tools/test_transcription_tools.py"
+          - "tests/tools/test_transcription_dotenv_fallback.py"
+
+      - title: "Upstream Backports: Provider & Model Fixes"
+        description: |
+          Various upstream fixes backported: Nous Portal Qwen cache routing,
+          MiniMax OAuth hardening (dashboard + runtime), Kimi/Moonshot model
+          metadata additions, markdown table vertical fallback for narrow
+          terminals, Ollama `/api/show` context-length probing, and voice
+          toolset definition.
+        globs:
+          - "agent/auxiliary_client.py"
+          - "agent/model_metadata.py"
+          - "agent/models_dev.py"
+          - "agent/markdown_tables.py"
+          - "hermes_cli/auth.py"
+          - "hermes_cli/auth_commands.py"
+          - "hermes_cli/runtime_provider.py"
+          - "hermes_cli/models.py"
+          - "hermes_cli/platforms.py"
+          - "toolsets.py"
+          - "tests/agent/test_markdown_tables.py"
+          - "tests/run_agent/test_anthropic_prompt_cache_policy.py"
+          - "tests/test_minimax_oauth.py"
+          - "tests/hermes_cli/test_auth_commands.py"
+          - "tests/hermes_cli/test_model_catalog.py"
+          - "tests/hermes_cli/test_models.py"
+          - "tests/hermes_cli/test_runtime_provider_resolution.py"
+
+      - title: "Upstream Backports: Web Dashboard OAuth & API Server"
+        description: |
+          Web dashboard OAuth dispatcher improvements with regression tests.
+          API server refactored to support streaming endpoint + session
+          continuity headers. Added `event_type` passthrough for webhook
+          adapters and HTTP Basic Auth for dashboard.
+        globs:
+          - "hermes_cli/web_server.py"
+          - "hermes_cli/config.py"
+          - "hermes_cli/tools_config.py"
+          - "gateway/platforms/api_server.py"
+          - "gateway/platforms/webhook.py"
+          - "gateway/status.py"
+          - "tests/hermes_cli/test_web_oauth_dispatch.py"
+
+      - title: "Upstream Backports: CLI & TUI Build"
+        description: |
+          CLI improvements: terminal-width-aware streaming response box.
+          TUI build switched to esbuild bundler (single `dist/entry.js`)
+          removing the legacy babel compile step. Nix lockfile hash updates.
+          Computer-use cua-driver refresh-on-update semantics.
+        globs:
+          - "cli.py"
+          - "hermes_cli/main.py"
+          - "ui-tui/package.json"
+          - "ui-tui/package-lock.json"
+          - "ui-tui/README.md"
+          - "ui-tui/scripts/build.mjs"
+          - "nix/tui.nix"
+          - "nix/checks.nix"
+          - "scripts/profile-tui.py"
+          - "tests/hermes_cli/test_tui_npm_install.py"
+          - "tests/hermes_cli/test_install_cua_driver.py"
+
+      - title: "Docs & Release"
+        description: |
+          Updated website docs: computer-use driver refresh instructions,
+          TUI docs for esbuild-based build, Voice/TTS provider table fixes,
+          AUTHOR_MAP additions.
+        globs:
+          - "website/docs/user-guide/features/computer-use.md"
+          - "website/docs/user-guide/tui.md"
+          - "website/docs/reference/cli-commands.md"
+          - "website/docs/integrations/index.md"
+          - "scripts/release.py"
+
+      - title: "Hosting fork summaries"
+        description: |
+          Added automation for generating and serving fork summaries (the page
+          you're reading now) via GitHub Pages, triggered on pushes to this file
+          or the workflow definition.
+        globs:
+          - ".github/workflows/pages.yml"
+          - "fork.yaml"
+
+ignore:
+  - "*.sum"
+  - "uv.lock"
+  - "package-lock.json"
+  - "ui-tui/package-lock.json"
+  - "website/package-lock.json"
+  - "web/package-lock.json"
+  - ".git"
+  - "fork.yaml"
