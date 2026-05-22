@@ -10,8 +10,8 @@ import re
 from pathlib import Path
 
 import yaml
-
 from typing import Optional
+import yaml
 
 
 def _load_wiki_registry() -> dict:
@@ -89,8 +89,12 @@ def wiki_list() -> dict:
 def _default_wiki_path() -> str:
     env = os.environ.get("WIKI_PATH", "")
     if env:
-        return env
+        return os.path.expanduser(env)
     return os.path.expanduser("~/wiki")
+
+
+def _default_wiki_path() -> str:
+    return resolve_wiki(None)
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
