@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import os
 import socket as _socket
 import re
@@ -50,6 +51,15 @@ from gateway.platforms.base import (
     SendResult,
     is_network_accessible,
 )
+
+# File serving for TUI gateway clients (HermesNative)
+try:
+    from tui_gateway.file_serve import cleanup_stale_files, register_file, resolve_file, validate_bearer_token  # noqa: F401
+except ImportError:
+    register_file = None  # type: ignore[assignment]
+    resolve_file = None  # type: ignore[assignment]
+    validate_bearer_token = None  # type: ignore[assignment]
+    cleanup_stale_files = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -2610,7 +2620,6 @@ class APIServerAdapter(BasePlatformAdapter):
         return web.json_response({"run_id": run_id, "status": "stopping"})
 
     async def _sweep_orphaned_runs(self) -> None:
-        """Periodically clean up run streams that were never consumed."""
         while True:
             await asyncio.sleep(60)
             now = time.time()
@@ -2765,6 +2774,58 @@ class APIServerAdapter(BasePlatformAdapter):
 
         return ws
 
+    async def _sweep_served_files(self) -> None:
+        """Periodically clean up stale served files (every 10 minutes)."""
+        while True:
+            await asyncio.sleep(600)
+            try:
+                removed = cleanup_stale_files()
+                if removed:
+                    logger.debug("[api_server] swept %d stale served files", removed)
+            except Exception:
+                logger.exception("[api_server] file sweep failed")
+
+    # ------------------------------------------------------------------
+    # File serving for TUI gateway clients (HermesNative)
+    # ------------------------------------------------------------------
+
+    async def _handle_file_download(self, request: "web.Request") -> "web.Response":
+        """GET /v1/files/{session_id}/{filename} — serve agent-produced files.
+
+        Authenticated with the same Bearer token used for the WebSocket
+        connection.  Path traversal is blocked.  The file must exist inside
+        ``~/.hermes/served-files/{session_id}/``.
+        """
+        if register_file is None:
+            return web.Response(status=503, text="File serving not available")
+
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        session_id = request.match_info.get("session_id", "")
+        filename = request.match_info.get("filename", "")
+
+        if not session_id or not filename:
+            return web.Response(status=400, text="Missing session_id or filename")
+
+        file_path = resolve_file(session_id, filename)
+        if file_path is None:
+            return web.Response(status=404, text="File not found")
+
+        # Determine content type
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+        return web.FileResponse(
+            path=str(file_path),
+            headers={
+                "Content-Type": mime_type,
+                "Cache-Control": "private, max-age=3600",
+            },
+        )
+
     # ------------------------------------------------------------------
     # BasePlatformAdapter interface
     # ------------------------------------------------------------------
@@ -2802,6 +2863,11 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_post("/v1/runs/{run_id}/stop", self._handle_stop_run)
             # WebSocket JSON-RPC endpoint (full TUI parity for native clients)
             self._app.router.add_get("/v1/ws", self._handle_ws)
+            # File serving for TUI gateway clients
+            if register_file is not None:
+                self._app.router.add_get(
+                    "/v1/files/{session_id}/{filename}", self._handle_file_download
+                )
             # Start background sweep to clean up orphaned (unconsumed) run streams
             sweep_task = asyncio.create_task(self._sweep_orphaned_runs())
             try:
@@ -2810,6 +2876,16 @@ class APIServerAdapter(BasePlatformAdapter):
                 pass
             if hasattr(sweep_task, "add_done_callback"):
                 sweep_task.add_done_callback(self._background_tasks.discard)
+
+            # Background file cleanup sweep (every 10 minutes)
+            if cleanup_stale_files is not None:
+                file_cleanup_task = asyncio.create_task(self._sweep_served_files())
+                try:
+                    self._background_tasks.add(file_cleanup_task)
+                except TypeError:
+                    pass
+                if hasattr(file_cleanup_task, "add_done_callback"):
+                    file_cleanup_task.add_done_callback(self._background_tasks.discard)
 
             # Refuse to start network-accessible without authentication
             if is_network_accessible(self._host) and not self._api_key:

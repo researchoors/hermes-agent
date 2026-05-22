@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -385,6 +386,37 @@ def _emit(event: str, sid: str, payload: dict | None = None):
     if payload is not None:
         params["payload"] = payload
     write_json({"jsonrpc": "2.0", "method": "event", "params": params})
+
+
+# Regex matching standalone MEDIA: lines.
+# Mirrors the TUI's MEDIA_LINE_RE and HermesNative's MediaParser pattern.
+_MEDIA_LINE_RE = re.compile(r"^\s*`?MEDIA:\s*(\S+?)`?\s*$", re.MULTILINE)
+
+
+def _transform_media_refs(text: str, session_id: str) -> str:
+    """Replace MEDIA:/path references with HTTP URLs for remote clients.
+
+    For each MEDIA: line in *text*, registers the file in the served
+    directory and replaces the local path with a download URL.  Files
+    that don't exist on disk are left unchanged.
+
+    Returns *text* with any substitutions applied.
+    """
+    try:
+        from tui_gateway.file_serve import register_file as _reg
+    except ImportError:
+        return text
+
+    base_url = os.environ.get("HERMES_FILE_SERVE_URL", "http://127.0.0.1:8642")
+
+    def _replace(match):
+        local_path = match.group(1)
+        meta = _reg(session_id, local_path, base_url=base_url)
+        if meta is None:
+            return match.group(0)  # file not found, leave as-is
+        return f"MEDIA:{meta['url']}"
+
+    return _MEDIA_LINE_RE.sub(_replace, text)
 
 
 def _status_update(sid: str, kind: str, text: str | None = None):
@@ -3216,6 +3248,12 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             else:
                 raw = str(result)
                 status = "complete"
+
+            # Stage MEDIA: files for remote clients (HermesNative over WebSocket).
+            # Replace local paths with HTTP URLs so remote clients can download
+            # the files via GET /v1/files/{session_id}/{filename}.
+            if status == "complete" and isinstance(raw, str):
+                raw = _transform_media_refs(raw, sid)
 
             payload = {"text": raw, "usage": _get_usage(agent), "status": status}
             if last_reasoning:
