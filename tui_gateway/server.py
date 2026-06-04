@@ -2565,6 +2565,67 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5007, str(e))
 
 
+@method("session.prompt_breakdown")
+def _(rid, params: dict) -> dict:
+    """Return the session's system prompt decomposed into sections with token counts."""
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    agent = session.get("agent")
+    home = Path(get_hermes_home())
+
+    try:
+        import tiktoken
+        _enc = tiktoken.get_encoding("cl100k_base")
+        _count = lambda t: len(_enc.encode(t)) if t else 0
+    except Exception:
+        _count = lambda t: max(1, int(len(t) / 3.5)) if t else 0
+
+    def _section(name, source, content, color):
+        text = (content or "").strip()
+        return dict(name=name, source=source,
+                    content_preview=text[:200], full_content=text[:10240],
+                    token_count=_count(text), char_count=len(text), color=color)
+
+    persona = ""
+    for p in [home / "SOUL.md", home / "persona.md"]:
+        if p.exists():
+            persona = p.read_text().strip()
+            break
+    memory = (home / "memories" / "MEMORY.md").read_text().strip() if (home / "memories" / "MEMORY.md").exists() else ""
+    user = (home / "memories" / "USER.md").read_text().strip() if (home / "memories" / "USER.md").exists() else ""
+    ephemeral = str(getattr(agent, "ephemeral_system_prompt", "") or "").strip()
+
+    skills = ""
+    if agent is not None and hasattr(agent, "tools"):
+        from run_agent import get_toolset_for_tool
+        toolsets = {ts for t in getattr(agent, "valid_tool_names", set()) if (ts := get_toolset_for_tool(t))}
+        if toolsets:
+            from agent.prompt_builder import build_skills_system_prompt
+            skills = build_skills_system_prompt(getattr(agent, "valid_tool_names", set()), toolsets)
+
+    tools_json = json.dumps(getattr(agent, "tools", []) or [], ensure_ascii=False)
+    history = list(session.get("history", []))
+    hist_json = json.dumps(history, ensure_ascii=False)
+
+    sections = [
+        _section("Persona", str(home / "SOUL.md"), persona, "#7c7cff"),
+        _section("Memory", str(home / "memories" / "MEMORY.md"), memory, "#ff7c7c"),
+        _section("User Profile", str(home / "memories" / "USER.md"), user, "#ffb87c"),
+        _section("Ephemeral Prompt", "(session personality/prompt)", ephemeral, "#7cff7c"),
+        _section("Active Skills", "~/.hermes/skills/", skills, "#ffd700"),
+    ]
+
+    return _ok(rid, dict(
+        session_id=params.get("session_id", ""),
+        model=getattr(agent, "model", "") if agent else "",
+        context_limit=131072,
+        total_system_tokens=sum(s["token_count"] for s in sections),
+        sections=sections,
+        tool_definitions=dict(token_count=_count(tools_json), count=len(getattr(agent, "tools", []) or [])),
+        conversation_history=dict(token_count=_count(hist_json), message_count=len(history)),
+    ))
+
 @method("session.usage")
 def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
@@ -2660,6 +2721,79 @@ def _(rid, params: dict) -> dict:
         },
     )
 
+
+@method("session.timeline")
+def _(rid, params: dict) -> dict:
+    """Return temporally-structured session events for playback visualization."""
+    session, _ = _sess_nowait(params, rid)
+    session_key = (session or {}).get("session_key") or params.get("session_id", "")
+    messages = list((session or {}).get("history", []))
+
+    db = _get_db()
+    if db and session_key:
+        try:
+            messages = db.get_messages_as_conversation(session_key, include_ancestors=True)
+        except Exception:
+            pass
+
+    events = []
+    tool_starts = {}
+    tool_count = 0
+    in_tokens = out_tokens = 0
+
+    for m in messages:
+        role = m.get("role")
+        ts = m.get("timestamp") or time.time()
+        tc = m.get("token_count")
+        if isinstance(tc, (int, float)):
+            if role == "user": in_tokens += int(tc)
+            elif role == "assistant": out_tokens += int(tc)
+
+        if role == "user":
+            if events and events[-1].get("type") != "turn_boundary":
+                events.append(dict(type="turn_boundary", timestamp=ts))
+            events.append(dict(type="user_message", timestamp=ts,
+                               content=_coerce_message_text(m.get("content")),
+                               token_count=tc))
+        elif role == "assistant":
+            for tc_item in m.get("tool_calls") or []:
+                fn = tc_item.get("function", {})
+                tid = tc_item.get("id", "")
+                name = fn.get("name", "")
+                evt = dict(type="tool_start", timestamp=ts, tool_name=name,
+                           tool_id=tid, summary=_tool_ctx(name, {}))
+                events.append(evt)
+                tool_starts[tid] = evt
+                tool_count += 1
+            content = _coerce_message_text(m.get("content"))
+            if content.strip():
+                events.append(dict(type="assistant_message", timestamp=ts,
+                                   content=content, token_count=tc))
+        elif role == "tool":
+            tid = m.get("tool_call_id", "")
+            start = tool_starts.get(tid, {})
+            dur = round((ts - start.get("timestamp", ts)) * 1000) if start.get("timestamp") and ts else None
+            events.append(dict(type="tool_end", timestamp=ts,
+                               tool_name=m.get("tool_name", ""), tool_id=tid,
+                               content=_coerce_message_text(m.get("content"))[:300],
+                               duration_ms=dur))
+
+    tss = [e["timestamp"] for e in events if isinstance(e.get("timestamp"), (int, float))]
+    total_duration = round(tss[-1] - tss[0], 1) if len(tss) >= 2 else 0.0
+
+    cost = None
+    if db and session_key:
+        try:
+            s = db.get_session(session_key) or {}
+            cost = s.get("actual_cost_usd") or s.get("estimated_cost_usd")
+        except Exception:
+            pass
+
+    return _ok(rid, dict(
+        session_id=session_key, events=events,
+        total_duration_seconds=total_duration, tool_calls=tool_count,
+        input_tokens=in_tokens, output_tokens=out_tokens, cost_usd=cost,
+    ))
 
 @method("session.undo")
 def _(rid, params: dict) -> dict:
