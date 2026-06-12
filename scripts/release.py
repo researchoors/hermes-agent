@@ -62,6 +62,7 @@ AUTHOR_MAP = {
     "0x.badfriend@gmail.com": "discodirector",
     "altriatree@gmail.com": "TruaShamu",
     "contact-me@stark-x.cn": "Stark-X",
+    "hankbobtheresearchoor@gmail.com": "hankbobtheresearchoor",
     "nat@nthrow.io": "nthrow",
     "m@mobrienv.dev": "mikeyobrien",
     "saeed919@pm.me": "falasi",
