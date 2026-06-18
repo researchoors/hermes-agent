@@ -48,10 +48,27 @@ def _write_feed(articles: list[dict]) -> None:
             pass
         raise
 
-def _article_id(source: str, title: str, ts: str) -> str:
+def _article_id(source: str, article: dict) -> str:
+    """Stable, collision-resistant ID for a feed article.
+
+    Derived from the article's own identifying content — URL when present
+    (the natural unique key), otherwise the full title+summary text. The
+    previous scheme hashed ``source:title:capture_date``, which collapsed
+    every title-less item from one run (e.g. tweets, which have no title)
+    into a single ID; the feed JSON then held N rows sharing one ``id`` and
+    the client's Identifiable ForEach rendered only one of them. Hashing
+    real content gives each tweet a distinct ID while still deduping genuine
+    repeats across runs.
+    """
     import hashlib
-    raw = f"{source}:{title}:{ts[:10]}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+    url = (article.get("url") or "").strip()
+    if url:
+        key = f"{source}:{url}"
+    else:
+        title = article.get("title", "")
+        summary = article.get("summary", "")
+        key = f"{source}:{title}:{summary}"
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 def append_digest(source: str, articles: list[dict]) -> int:
@@ -60,15 +77,19 @@ def append_digest(source: str, articles: list[dict]) -> int:
     existing_ids = {a["id"] for a in feed}
     new_articles = []
     for a in articles:
-        aid = _article_id(source, a.get("title", ""), now)
+        aid = _article_id(source, a)
+        # Skip items already in the stored feed AND duplicates within this
+        # same batch (existing_ids is updated as we go), so a feed never holds
+        # two rows with the same id — which the client would otherwise collapse.
         if aid in existing_ids:
             continue
+        existing_ids.add(aid)
         new_articles.append({
             "id": aid, "source": source,
             "title": a.get("title", ""), "url": a.get("url", ""),
             "summary": a.get("summary", "")[:500],
             "tags": a.get("tags", []), "image_url": a.get("image_url", ""),
-            "ts": now,
+            "ts": a.get("ts") or now,
         })
     feed[:0] = new_articles
     feed = feed[:MAX_ARTICLES]
