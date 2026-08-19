@@ -1841,6 +1841,25 @@ class APIServerAdapter(BasePlatformAdapter):
             status=401,
         )
 
+    async def _handle_file_download(self, request: "web.Request") -> "web.Response":
+        """Serve a session-scoped file staged from an agent MEDIA response."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        from tui_gateway.file_serve import resolve_file
+
+        session_id = request.match_info.get("session_id", "")
+        filename = request.match_info.get("filename", "")
+        file_path = resolve_file(session_id, filename)
+        if file_path is None:
+            return web.Response(status=404, text="File not found.")
+
+        response = web.FileResponse(path=file_path)
+        response.headers["Content-Disposition"] = f'inline; filename="{file_path.name}"'
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+
     @staticmethod
     def _normalize_callback_platform(value: str) -> str:
         normalized = (value or "").strip().lower().replace("-", "_")
@@ -2104,6 +2123,7 @@ class APIServerAdapter(BasePlatformAdapter):
             ("POST", "/v1/runs/{run_id}/approval", self._handle_run_approval),
             ("POST", "/v1/runs/{run_id}/stop", self._handle_stop_run),
             ("GET", "/v1/ws", self._handle_ws),
+            ("GET", "/v1/files/{session_id}/{filename}", self._handle_file_download),
         ]
         if _CRON_AVAILABLE:
             # Chronos managed-cron fire webhook (NAS → agent). Authenticated

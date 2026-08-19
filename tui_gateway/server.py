@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -52,6 +53,26 @@ from tui_gateway.transport import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MEDIA_LINE_RE = re.compile(r"(?m)^(?P<prefix>\s*MEDIA:\s*)(?P<path>\S+?)(?P<suffix>\s*)$")
+
+
+def _transform_media_refs(text: str, session_id: str) -> str:
+    """Stage local MEDIA files and expose authenticated gateway URLs."""
+    from tui_gateway.file_serve import register_file
+
+    base_url = os.environ.get("HERMES_FILE_SERVE_URL", "http://127.0.0.1:8642")
+
+    def replace(match: re.Match) -> str:
+        raw_path = match.group("path").strip("`")
+        if raw_path.startswith(("http://", "https://")):
+            return match.group(0)
+        registered = register_file(session_id, raw_path, base_url=base_url)
+        if not registered:
+            return match.group(0)
+        return f"{match.group('prefix')}{registered['url']}{match.group('suffix')}"
+
+    return _MEDIA_LINE_RE.sub(replace, str(text or ""))
 
 _hermes_home = get_hermes_home()
 load_hermes_dotenv(
@@ -10193,6 +10214,7 @@ def _run_prompt_submit(
                 raw = str(result)
                 status = "complete"
 
+            raw = _transform_media_refs(raw, sid)
             payload = {"text": raw, "usage": _get_usage(agent), "status": status}
             if last_reasoning:
                 payload["reasoning"] = last_reasoning
